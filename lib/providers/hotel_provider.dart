@@ -199,7 +199,7 @@ class HotelProvider with ChangeNotifier {
           return null;
         }
         return data;
-      }).whereType<Map<String, dynamic>>().toList(); // Remove null values
+      }).whereType<Map<String, dynamic>>().toList(); // remove null values
     } catch (e) {
       print('Error fetching bookings for room: $e');
       return [];
@@ -280,7 +280,7 @@ class HotelProvider with ChangeNotifier {
     if (_hotelId == null) throw Exception("Hotel ID not found");
 
     try {
-      // Prepare the booking document
+      
       final bookingData = {
         'guestCnic': booking['guestCnic'], // From text field
         'roomNumber': booking['roomNumber'],
@@ -294,10 +294,10 @@ class HotelProvider with ChangeNotifier {
         'lastUpdated': Timestamp.now(),
       };
 
-      // Add to Firestore
+
       await _firestore.collection('bookings').add(bookingData);
 
-      // Refresh local data
+    
       await fetchRooms();
       notifyListeners();
 
@@ -306,7 +306,7 @@ class HotelProvider with ChangeNotifier {
       rethrow;
     }
   }
-  // Add to HotelProvider class
+
 
   Future<List<Map<String, dynamic>>> getBookingsForDateRange(
       String roomId, DateTime start, DateTime end) async {
@@ -331,7 +331,7 @@ class HotelProvider with ChangeNotifier {
     }
   }
 
-  // Add these methods to your HotelProvider class
+ 
 
   Future<List<Map<String, dynamic>>> getAvailableRooms(DateTime date) async {
     if (_hotelId == null) return [];
@@ -383,7 +383,7 @@ class HotelProvider with ChangeNotifier {
     }
   }
 
-// Your existing method with the fixes
+
   Future<Map<DateTime, bool>> getRoomAvailability(
       String roomId, DateTime startDate, int days) async {
     final availability = <DateTime, bool>{};
@@ -396,7 +396,7 @@ class HotelProvider with ChangeNotifier {
     }
 
     try {
-      // Get all bookings for this room that overlap with our date range
+      // Getting all bookings for this room that overlap with our date range
       final bookings = await _firestore
           .collection('bookings')
           .where('roomId', isEqualTo: roomId)
@@ -404,7 +404,7 @@ class HotelProvider with ChangeNotifier {
           .where('endDate', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
           .get();
 
-      // Mark booked dates
+      // marking booked dates
       for (final booking in bookings.docs) {
         final bookingData = booking.data();
         final bookingStart = (bookingData['startDate'] as Timestamp).toDate();
@@ -425,7 +425,7 @@ class HotelProvider with ChangeNotifier {
 
     return availability;
   }
-  // Add to your HotelProvider class
+
   List<Map<String, dynamic>> cachedBookings = [];
   bool _isBookingCacheValid = false;
 
@@ -461,7 +461,6 @@ class HotelProvider with ChangeNotifier {
     }
   }
 
-  // Add this to your HotelProvider class
   Future<void> addOnlineBooking({
     required String roomId,
     required String roomNumber,
@@ -498,7 +497,7 @@ class HotelProvider with ChangeNotifier {
       };
 
       await _firestore.collection('bookings').add(bookingData);
-      await fetchRooms(); // Refresh data
+      await fetchRooms(); // refresh data
       notifyListeners();
     } catch (e) {
       print('Error adding online booking: $e');
