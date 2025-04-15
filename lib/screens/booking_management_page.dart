@@ -65,7 +65,7 @@ class BookingManagementScreen extends StatelessWidget {
       ),
     );
   }
-  // In your booking_management_page.dart
+  
 
   void _showOfflineBookingDialog(BuildContext context, HotelProvider hotelProvider) {
     showDialog(
