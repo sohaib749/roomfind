@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "237136057344",
+    "project_id": "roomfind-65ad4",
+    "storage_bucket": "roomfind-65ad4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:237136057344:android:204217cf4452291fc474e5",
+        "android_client_info": {
+          "package_name": "com.example.roomfind"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA4Yqx9BX4NNi-e6dkA2r8gy60F6uLyJNY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
