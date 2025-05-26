@@ -14,136 +14,82 @@ class WeeklyBookingTable extends StatefulWidget {
 }
 
 class _WeeklyBookingTableState extends State<WeeklyBookingTable> {
+  late DateTime _startOfWeek;
+  late List<String> _weekDays;
+  late String _weekDateRange;
+  bool _isLoading = true;
+  String? _errorMessage;
+  bool _usingOptimizedQuery = true;
+
   @override
-  Widget build(BuildContext context) {
-    final hotelProvider = Provider.of<HotelProvider>(context);
-
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('bookings')
-          .where('hotelId', isEqualTo: widget.hotelId)
-          .where('endDate', isGreaterThanOrEqualTo: Timestamp.now())
-          .snapshots(),
-      builder: (context, snapshot) {
-        // Use cached data immediately while waiting for fresh data
-        if (snapshot.connectionState == ConnectionState.waiting &&
-            hotelProvider.cachedBookings.isNotEmpty) {
-          return _buildMainContent(hotelProvider, hotelProvider.cachedBookings);
-        }
-
-        // If no cached data and still loading, show spinner
-        if (!snapshot.hasData) {
-          return Center(child: CircularProgressIndicator());
-        }
-
-        // Process fresh data
-        final bookings = snapshot.data!.docs.map((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          return {
-            ...data,
-            'startDate': (data['startDate'] as Timestamp).toDate(),
-            'endDate': (data['endDate'] as Timestamp).toDate(),
-          };
-        }).toList();
-
-        // Update cache for next time
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          hotelProvider.cachedBookings = bookings;
-        });
-
-        return _buildMainContent(hotelProvider, bookings);
-      },
-    );
+  void initState() {
+    super.initState();
+    _startOfWeek = _getStartOfWeek(DateTime.now());
+    _weekDays = _getWeekDays(_startOfWeek);
+    _weekDateRange = _getWeekDateRange(_startOfWeek);
+    _loadBookings();
   }
 
-  Widget _buildMainContent(HotelProvider hotelProvider, List<Map<String, dynamic>> bookings) {
-    final startOfWeek = DateTime.now();
-    final weekDateRange = _getWeekDateRange(startOfWeek);
-    final weekDays = _getWeekDays(startOfWeek);
+  Future<void> _loadBookings() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
 
-    if (hotelProvider.rooms.isEmpty) {
-      return Center(child: Text('No rooms available'));
+    try {
+      final endOfWeek = _startOfWeek.add(const Duration(days: 6));
+      QuerySnapshot querySnapshot;
+
+      // Try optimized query first
+      if (_usingOptimizedQuery) {
+        try {
+          querySnapshot = await FirebaseFirestore.instance
+              .collection('bookings')
+              .where('hotelId', isEqualTo: widget.hotelId)
+              .where('startDate', isLessThanOrEqualTo: Timestamp.fromDate(endOfWeek))
+              .where('endDate', isGreaterThanOrEqualTo: Timestamp.fromDate(_startOfWeek))
+              .get();
+        } catch (e) {
+          if (e.toString().contains('index')) {
+            // Fall back to simpler query if index doesn't exist
+            _usingOptimizedQuery = false;
+            querySnapshot = await FirebaseFirestore.instance
+                .collection('bookings')
+                .where('hotelId', isEqualTo: widget.hotelId)
+                .where('endDate', isGreaterThanOrEqualTo: Timestamp.fromDate(_startOfWeek))
+                .get();
+          } else {
+            rethrow;
+          }
+        }
+      } else {
+        // Use fallback query
+        querySnapshot = await FirebaseFirestore.instance
+            .collection('bookings')
+            .where('hotelId', isEqualTo: widget.hotelId)
+            .where('endDate', isGreaterThanOrEqualTo: Timestamp.fromDate(_startOfWeek))
+            .get();
+      }
+
+      final hotelProvider = Provider.of<HotelProvider>(context, listen: false);
+      hotelProvider.cachedBookings = querySnapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        return {
+          ...data,
+          'startDate': (data['startDate'] as Timestamp).toDate(),
+          'endDate': (data['endDate'] as Timestamp).toDate(),
+        };
+      }).toList();
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Error loading bookings: ${e.toString()}';
+      });
+      debugPrint('Error loading bookings: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
     }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Text(
-            'Week: $weekDateRange',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-        ),
-        Expanded(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: DataTable(
-              headingRowColor: WidgetStateColor.resolveWith(
-                    (states) => Colors.green.shade700,
-              ),
-              columns: [
-                DataColumn(
-                  label: Text(
-                    "Room Number",
-                    style: TextStyle(color: Colors.white),
-                  ),
-                ),
-                ...weekDays.map((day) => DataColumn(
-                  label: Text(
-                    day,
-                    style: TextStyle(color: Colors.white),
-                  ),
-                )),
-              ],
-              rows: hotelProvider.rooms.map((room) {
-                return DataRow(
-                  cells: [
-                    DataCell(
-                      Text(
-                        "Room ${room['roomNumber']}",
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    ...weekDays.map((day) {
-                      final dayDate = startOfWeek.add(
-                        Duration(days: weekDays.indexOf(day)),
-                      );
-                      final isBooked = _isRoomBookedForDate(
-                          bookings, room['id'], dayDate);
-
-                      return DataCell(
-                        Container(
-
-                          decoration: BoxDecoration(
-                            color: isBooked
-                                ? Colors.red[100]?.withAlpha(230)  // 230 ≈ 0.9 * 255
-                                : Colors.green[100]?.withAlpha(230),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          padding: EdgeInsets.all(8),
-                          child: Center(
-                            child: Text(
-                              isBooked ? "Booked" : "Vacant",
-                              style: TextStyle(
-                                color: isBooked
-                                    ? Colors.red[800]
-                                    : Colors.green[800],
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ),
-                      );
-                    }),
-                  ],
-                );
-              }).toList(),
-            ),
-          ),
-        ),
-      ],
-    );
   }
 
   bool _isRoomBookedForDate(
@@ -151,16 +97,172 @@ class _WeeklyBookingTableState extends State<WeeklyBookingTable> {
       String roomId,
       DateTime date,
       ) {
-    return bookings.any((booking) {
-      if (booking['roomId'] != roomId) return false;
+    final checkDate = DateTime(date.year, date.month, date.day);
 
-      final startDate = booking['startDate'] as DateTime;
-      final endDate = booking['endDate'] as DateTime;
+    return bookings.where((b) => b['roomId'] == roomId).any((booking) {
+      final startDate = (booking['startDate'] as DateTime);
+      final endDate = (booking['endDate'] as DateTime);
+      final bookingStart = DateTime(startDate.year, startDate.month, startDate.day);
+      final bookingEnd = DateTime(endDate.year, endDate.month, endDate.day);
 
-      return date.isAtSameMomentAs(startDate) ||
-          date.isAtSameMomentAs(endDate) ||
-          (date.isAfter(startDate) && date.isBefore(endDate));
+      return checkDate.isAtSameMomentAs(bookingStart) ||
+          checkDate.isAtSameMomentAs(bookingEnd) ||
+          (checkDate.isAfter(bookingStart) && checkDate.isBefore(bookingEnd));
     });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hotelProvider = Provider.of<HotelProvider>(context);
+
+    if (_isLoading) {
+      return Center(child: CircularProgressIndicator());
+    }
+
+    if (_errorMessage != null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(_errorMessage!),
+            if (_errorMessage!.contains('index'))
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text(
+                  'Please create the required Firestore index',
+                  style: TextStyle(color: Colors.red),
+                ),
+              ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _loadBookings,
+              child: Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Row(
+            children: [
+              Text(
+                'Week: $_weekDateRange',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              Spacer(),
+              IconButton(
+                icon: Icon(Icons.chevron_left),
+                onPressed: () {
+                  setState(() {
+                    _startOfWeek = _startOfWeek.add(Duration(days: -7));
+                    _weekDays = _getWeekDays(_startOfWeek);
+                    _weekDateRange = _getWeekDateRange(_startOfWeek);
+                  });
+                  _loadBookings();
+                },
+              ),
+              IconButton(
+                icon: Icon(Icons.chevron_right),
+                onPressed: () {
+                  setState(() {
+                    _startOfWeek = _startOfWeek.add(Duration(days: 7));
+                    _weekDays = _getWeekDays(_startOfWeek);
+                    _weekDateRange = _getWeekDateRange(_startOfWeek);
+                  });
+                  _loadBookings();
+                },
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _buildBookingTable(hotelProvider),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBookingTable(HotelProvider hotelProvider) {
+    if (hotelProvider.rooms.isEmpty) {
+      return Center(child: Text('No rooms available'));
+    }
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.vertical,
+        child: DataTable(
+          headingRowColor: WidgetStateColor.resolveWith(
+                (states) => Colors.green.shade700,
+          ),
+          columns: [
+            DataColumn(
+              label: Text(
+                "Room Number",
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+            ..._weekDays.map((day) => DataColumn(
+              label: Text(
+                day,
+                style: TextStyle(color: Colors.white),
+              ),
+            )),
+          ],
+          rows: hotelProvider.rooms.map((room) {
+            return DataRow(
+              cells: [
+                DataCell(
+                  Text(
+                    "Room ${room['roomNumber']}",
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                ..._weekDays.map((day) {
+                  final dayDate = _startOfWeek.add(
+                    Duration(days: _weekDays.indexOf(day)),
+                  );
+                  final isBooked = _isRoomBookedForDate(
+                      hotelProvider.cachedBookings, room['id'], dayDate);
+
+                  return DataCell(
+                    Container(
+                      decoration: BoxDecoration(
+                        color: isBooked
+                            ? Colors.red[100]?.withAlpha(230)
+                            : Colors.green[100]?.withAlpha(230),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      padding: EdgeInsets.all(8),
+                      child: Center(
+                        child: Text(
+                          isBooked ? "Booked" : "Vacant",
+                          style: TextStyle(
+                            color: isBooked
+                                ? Colors.red[800]
+                                : Colors.green[800],
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ],
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  DateTime _getStartOfWeek(DateTime date) {
+    return date.subtract(Duration(days: date.weekday - 1));
   }
 
   String _getWeekDateRange(DateTime startOfWeek) {
@@ -170,7 +272,7 @@ class _WeeklyBookingTableState extends State<WeeklyBookingTable> {
   }
 
   List<String> _getWeekDays(DateTime startOfWeek) {
-    final dateFormat = DateFormat('E'); // Short day name (Mon, Tue, etc.)
+    final dateFormat = DateFormat('E');
     return List.generate(7, (index) {
       return dateFormat.format(startOfWeek.add(Duration(days: index)));
     });

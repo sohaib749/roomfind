@@ -2,18 +2,38 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:roomfind/providers/hotel_provider.dart';
 import 'package:roomfind/screens/customer/online_booking_dialog.dart';
+import 'package:logger/logger.dart';
+import 'package:roomfind/providers/customer_hotel_provider.dart';
 class RoomDetailPage extends StatelessWidget {
+
   final Map<String, dynamic> room;
 
   const RoomDetailPage({
     required this.room,
     super.key,
   });
+  Future<String> _resolveHotelId(Map<String, dynamic> room, HotelProvider provider) async {
+    // 1. Check direct room data first
+    if (room['hotelId']?.toString().trim().isNotEmpty ?? false) {
+      return room['hotelId'].toString().trim();
+    }
 
+    // 2. Check provider cache
+    if (provider.currentHotelId?.trim().isNotEmpty ?? false) {
+      return provider.currentHotelId!.trim();
+    }
+
+    // 3. Try to load hotelId if not available
+    await provider.ensureHotelIdLoaded();
+
+    // 4. Return whatever we have (even if empty)
+    return provider.currentHotelId?.trim() ?? '';
+  }
   @override
   Widget build(BuildContext context) {
     print("Room Data: $room");
 
+    final _logger = Logger();
 
     final List<String> imageUrls = _convertToList(room['imageUrls'] ?? room['imageUrl']);
     final List<String> amenities = _convertToList(room['amenities']);
@@ -114,9 +134,7 @@ class RoomDetailPage extends StatelessWidget {
             _buildDetailRow(icon: Icons.king_bed, label: "Type", value: room['type']?.toString() ?? 'N/A'),
             SizedBox(height: 10),
             _buildDetailRow(icon: Icons.attach_money, label: "Price", value: "\$${room['price']?.toString() ?? 'N/A'}"),
-            SizedBox(height: 10),
-            _buildDetailRow(icon: Icons.info, label: "Status", value: room['status']?.toString() ?? 'N/A'),
-            SizedBox(height: 20),
+             SizedBox(height: 20),
 
             // Amenities
             Text("Amenities", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.green)),
@@ -137,28 +155,69 @@ class RoomDetailPage extends StatelessWidget {
 
             // Book Now Button
             SizedBox(height: 30),
+            // Modify the Book Now button section
+            // Update the Book Now button
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                minimumSize: Size(double.infinity, 50),
+                backgroundColor: Colors.green, // Green background
+                foregroundColor: Colors.white, // White text
+                padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20), // Bigger button
+                textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              onPressed: () {
+              onPressed: () async {
                 final hotelProvider = Provider.of<HotelProvider>(context, listen: false);
-                showDialog(
-                  context: context,
-                  builder: (context) => OnlineBookingDialog(
-                    hotelProvider: hotelProvider,
-                    room: room,
-                  ),
-                );
+                final customerHotelProvider = Provider.of<CustomerHotelProvider>(context, listen: false);
+                try {
+
+                  _logger.d('Original Room Data:', error: room);
+
+
+                  final hotelId = await _resolveHotelId(room, hotelProvider);
+                  if (hotelId.isEmpty) {
+                    _logger.e('Failed to resolve hotelId');
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('System configuration error')));
+                    }
+                    return;
+                  }
+                  final String userPhoneNumber = customerHotelProvider.customerPhone ?? '';
+
+
+                  final bookingData = {
+                    ...room,
+                    'hotelId': hotelId, // Override with resolved ID
+                    'resolvedAt': DateTime.now().toIso8601String(),
+                  };
+
+                  _logger.i('Final Booking Data:', error: bookingData);
+
+                  if (!context.mounted) return;
+
+                  // Where you show the dialog
+                  await showDialog(
+                    context: context,
+                    builder: (context) => OnlineBookingDialog(
+                      hotelProvider: hotelProvider,
+                      customerProvider: customerHotelProvider, // Make sure this is available
+                      room: bookingData,
+                      userPhoneNumber: userPhoneNumber, // Pass the actual phone number
+                    ),
+                  );
+                } catch (e) {
+                  _logger.e('Booking flow error:', error: e);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Error: ${e.toString()}')),
+                    );
+                  }
+                }
               },
-              child: Text(
-                'Book Now',
-                style: TextStyle(color: Colors.white, fontSize: 18),
-              ),
+              child: const Text('Book Now'),
+
             ),
           ],
         ),
@@ -218,4 +277,5 @@ class RoomDetailPage extends StatelessWidget {
       ],
     );
   }
+
 }

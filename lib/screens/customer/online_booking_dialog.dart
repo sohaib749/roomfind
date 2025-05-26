@@ -1,36 +1,44 @@
+//online_booking_dialog.dart
 import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
 import 'package:roomfind/providers/hotel_provider.dart';
-
+import 'package:flutter/services.dart';
+import 'package:roomfind/services/formatters.dart';
+import 'package:roomfind/providers/customer_hotel_provider.dart';
+import 'package:roomfind/screens/customer/table_calendar.dart';
 class OnlineBookingDialog extends StatefulWidget {
   final HotelProvider hotelProvider;
+  final CustomerHotelProvider customerProvider;
   final Map<String, dynamic> room;
+  final String userPhoneNumber; // The unique phone number identifier
 
   const OnlineBookingDialog({
     required this.hotelProvider,
+    required this.customerProvider,
     required this.room,
-    super.key,
-  });
+    required this.userPhoneNumber,
+    Key? key,
+  }) : super(key: key);
 
   @override
   _OnlineBookingDialogState createState() => _OnlineBookingDialogState();
 }
+// Add this above the _OnlineBookingDialogState class
+
 
 class _OnlineBookingDialogState extends State<OnlineBookingDialog> {
   late DateTime _selectedDay;
   late DateTime _focusedDay;
   DateTime? _rangeStart;
   DateTime? _rangeEnd;
-  int _nights = 1;
   final _formKey = GlobalKey<FormState>();
   List<DateTime> _unavailableDates = [];
   bool _isLoading = true;
+  String? _customerName;
 
-  // Guest details controllers
-  final _nameController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _phoneController = TextEditingController();
+  // Only these fields are collected from user
+  final _cnicController = TextEditingController();
   String _paymentMethod = 'Credit Card';
 
   @override
@@ -38,110 +46,165 @@ class _OnlineBookingDialogState extends State<OnlineBookingDialog> {
     super.initState();
     _selectedDay = DateTime.now();
     _focusedDay = DateTime.now();
+    _loadCustomerData();
     _loadUnavailableDates();
+  }
+
+  Future<void> _loadCustomerData() async {
+    try {
+      await widget.customerProvider.fetchCustomerProfile(widget.userPhoneNumber);
+      setState(() {
+        _customerName = widget.customerProvider.customerName;
+      });
+    } catch (e) {
+      debugPrint('Error loading customer data: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _cnicController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadUnavailableDates() async {
     setState(() => _isLoading = true);
     try {
-      final bookings = await widget.hotelProvider.getBookingsForDateRange(
+      _unavailableDates = await widget.hotelProvider.getUnavailableDates(
         widget.room['roomId'],
-        DateTime.now(),
-        DateTime.now().add(Duration(days: 365)),
       );
-
-      _unavailableDates = bookings.expand((booking) {
-        final start = booking['startDate'] as DateTime;
-        final end = booking['endDate'] as DateTime;
-        final dates = <DateTime>[];
-        for (var date = start; date.isBefore(end.add(Duration(days: 1))); date = date.add(Duration(days: 1))) {
-          dates.add(date);
-        }
-        return dates;
-      }).toList();
     } catch (e) {
-      print('Error loading unavailable dates: $e');
+      debugPrint('Error loading unavailable dates: $e');
     }
     setState(() => _isLoading = false);
   }
 
-  bool _isDateUnavailable(DateTime date) {
-    return _unavailableDates.any((unavailable) =>
-        isSameDay(unavailable, date));
-  }
-
-  bool _hasUnavailableInRange(DateTime start, DateTime end) {
-    for (var date = start; date.isBefore(end.add(Duration(days: 1))); date = date.add(Duration(days: 1))) {
-      if (_isDateUnavailable(date)) return true;
-    }
-    return false;
-  }
-
   Future<void> _confirmBooking() async {
     if (!_formKey.currentState!.validate()) return;
-
     if (_rangeStart == null || _rangeEnd == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please select valid dates')),
+        const SnackBar(content: Text('Please select booking dates')),
       );
       return;
     }
 
-    try {
-      // Get hotelId directly from room data
-      final hotelId = widget.room['hotelId'];
-      if (hotelId == null || hotelId.isEmpty) {
-        throw Exception('Room is not associated with any hotel');
-      }
+    // Show loading indicator
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('Checking availability...'),
+          ],
+        ),
+      ),
+    );
 
+    try {
+      // First check availability
       final isAvailable = await widget.hotelProvider.isRoomAvailable(
-          widget.room['roomId'],
-          _rangeStart!,
-          _rangeEnd!
+        widget.room['roomId'],
+        _rangeStart!,
+        _rangeEnd!,
       );
 
       if (!isAvailable) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Selected dates are no longer available')),
-        );
-        await _loadUnavailableDates();
+        if (mounted) {
+          Navigator.pop(context); // Close loading dialog
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Selected dates are no longer available'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
         return;
       }
 
+      // If available, proceed with booking
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const AlertDialog(
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('Processing your booking...'),
+              ],
+            ),
+          ),
+        );
+      }
+
       await widget.hotelProvider.addOnlineBooking(
-        roomId: widget.room['roomId'],
+        roomId: widget.room['id'] ?? widget.room['roomId'],
         roomNumber: widget.room['roomNumber'],
+        hotelId: widget.room['hotelId'] ?? widget.hotelProvider.currentHotelId,
         startDate: _rangeStart!,
         endDate: _rangeEnd!,
-        guestName: _nameController.text,
-        guestEmail: _emailController.text,
-        guestPhone: _phoneController.text,
+        guestName: widget.customerProvider.customerName ?? '',
+        guestCnic: _cnicController.text.trim(),
+        guestPhone: widget.customerProvider.customerPhone ?? '',
+        userId: widget.customerProvider.customerId ?? '',
         paymentMethod: _paymentMethod,
-        hotelId: hotelId, // Use the hotelId from room data
       );
 
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Booking successful!')),
-      );
+      if (mounted) {
+        Navigator.pop(context); // Close loading
+        Navigator.pop(context, true); // Close dialog with success
+
+        // Show confirmation
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Booking Confirmed'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Room: ${widget.room['roomNumber']}'),
+                const SizedBox(height: 8),
+                Text('${DateFormat('MMM dd, yyyy').format(_rangeStart!)} - '
+                    '${DateFormat('MMM dd, yyyy').format(_rangeEnd!)}'),
+                const SizedBox(height: 16),
+                const Text('Confirmation sent to your phone number.'),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Booking failed: ${e.toString()}')),
-      );
+      if (mounted) {
+        Navigator.pop(context); // Close loading
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Booking failed: ${e.toString()}'),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
     }
   }
-
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      insetPadding: EdgeInsets.all(20),
+      insetPadding: const EdgeInsets.all(16),
       child: _isLoading
-          ? Center(child: CircularProgressIndicator())
-          : ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.9,
-          maxHeight: MediaQuery.of(context).size.height * 0.8,
-        ),
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(16.0),
           child: Form(
@@ -151,167 +214,113 @@ class _OnlineBookingDialogState extends State<OnlineBookingDialog> {
               children: [
                 Text(
                   'Book Room ${widget.room['roomNumber']}',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  style: Theme.of(context).textTheme.headlineSmall,
                 ),
-                SizedBox(height: 16),
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          height: 400,
-                          child: TableCalendar(
-                            firstDay: DateTime.now(),
-                            lastDay: DateTime.now().add(Duration(days: 365)),
-                            focusedDay: _focusedDay,
-                            selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
-                            rangeStartDay: _rangeStart,
-                            rangeEndDay: _rangeEnd,
-                            calendarFormat: CalendarFormat.month,
-                            rangeSelectionMode: RangeSelectionMode.toggledOn,
-                            availableGestures: AvailableGestures.all,
-                            enabledDayPredicate: (day) {
-                              return !day.isBefore(DateTime.now().subtract(Duration(days: 1))) &&
-                                  !_isDateUnavailable(day);
-                            },
-                            onDaySelected: (selectedDay, focusedDay) {
-                              if (_isDateUnavailable(selectedDay)) return;
-                              setState(() {
-                                _selectedDay = selectedDay;
-                                _focusedDay = focusedDay;
-                                _rangeStart = null;
-                                _rangeEnd = null;
-                              });
-                            },
-                            onRangeSelected: (start, end, focusedDay) {
-                              if (_hasUnavailableInRange(start!, end!)) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Selected range contains unavailable dates')),
-                                );
-                                return;
-                              }
-                              setState(() {
-                                _rangeStart = start;
-                                _rangeEnd = end;
-                                _selectedDay = start;
-                                _focusedDay = focusedDay;
-                                _nights = end.difference(start).inDays;
-                              });
-                            },
-                            calendarStyle: CalendarStyle(
-                              unavailableStyle: TextStyle(
-                                color: Colors.grey[400],
-                                decoration: TextDecoration.lineThrough,
-                              ),
-                              rangeHighlightColor: Colors.green.shade100,
-                              rangeStartDecoration: BoxDecoration(
-                                color: Colors.green,
-                                shape: BoxShape.circle,
-                              ),
-                              rangeEndDecoration: BoxDecoration(
-                                color: Colors.green,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                          ),
-                        ),
-                        SizedBox(height: 16),
-                        if (_rangeStart != null && _rangeEnd != null)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8.0),
-                            child: Text(
-                              'Selected: ${DateFormat('MMM dd').format(_rangeStart!)} - '
-                                  '${DateFormat('MMM dd').format(_rangeEnd!)} (${_nights} nights)',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        TextFormField(
-                          controller: _nameController,
-                          decoration: InputDecoration(
-                            labelText: 'Full Name',
-                            border: OutlineInputBorder(),
-                          ),
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'Please enter your name';
-                            }
-                            return null;
-                          },
-                        ),
-                        SizedBox(height: 10),
-                        TextFormField(
-                          controller: _emailController,
-                          decoration: InputDecoration(
-                            labelText: 'Email',
-                            border: OutlineInputBorder(),
-                          ),
-                          keyboardType: TextInputType.emailAddress,
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'Please enter your email';
-                            }
-                            if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(value)) {
-                              return 'Enter a valid email';
-                            }
-                            return null;
-                          },
-                        ),
-                        SizedBox(height: 10),
-                        TextFormField(
-                          controller: _phoneController,
-                          decoration: InputDecoration(
-                            labelText: 'Phone Number',
-                            border: OutlineInputBorder(),
-                          ),
-                          keyboardType: TextInputType.phone,
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'Please enter your phone number';
-                            }
-                            return null;
-                          },
-                        ),
-                        SizedBox(height: 10),
-                        DropdownButtonFormField<String>(
-                          value: _paymentMethod,
-                          decoration: InputDecoration(
-                            labelText: 'Payment Method',
-                            border: OutlineInputBorder(),
-                          ),
-                          items: ['Credit Card', 'Debit Card', 'PayPal', 'Bank Transfer']
-                              .map((method) => DropdownMenuItem(
-                            value: method,
-                            child: Text(method),
-                          ))
-                              .toList(),
-                          onChanged: (value) {
-                            if (value != null) {
-                              setState(() {
-                                _paymentMethod = value;
-                              });
-                            }
-                          },
-                        ),
-                      ],
+                const SizedBox(height: 16),
+
+                // Display customer info
+                if (_customerName != null)
+                  ListTile(
+                    leading: const Icon(Icons.person),
+                    title: const Text('Booking for'),
+                    subtitle: Text(
+                      _customerName!,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ),
+
+                // Date selection
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 50),
+                  ),
+                  onPressed: () async {
+                    showDialog(
+                      context: context,
+                      builder: (context) => CalendarDialog(
+                        unavailableDates: _unavailableDates,
+                        onDateRangeSelected: (start, end) {
+                          setState(() {
+                            _rangeStart = start;
+                            _rangeEnd = end;
+                          });
+                        },
+                      ),
+                    );
+                  },
+
+                  child: Text(
+                    _rangeStart == null
+                        ? 'Select Dates'
+                        : '${DateFormat('MMM dd').format(_rangeStart!)} - '
+                        '${DateFormat('MMM dd').format(_rangeEnd!)}',
+                  ),
                 ),
-                SizedBox(height: 16),
+                const SizedBox(height: 16),
+
+                // CNIC Input
+                TextFormField(
+                  controller: _cnicController,
+                  decoration: const InputDecoration(
+                    labelText: 'CNIC Number',
+                    hintText: 'XXXXX-XXXXXXX-X',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.credit_card),
+                  ),
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(15),
+                    CnicInputFormatter(),
+                  ],
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter your CNIC';
+                    }
+                    if (!RegExp(r'^\d{5}-\d{7}-\d{1}$').hasMatch(value)) {
+                      return 'Invalid CNIC format';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Payment Method
+                DropdownButtonFormField<String>(
+                  value: _paymentMethod,
+                  decoration: const InputDecoration(
+                    labelText: 'Payment Method',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.payment),
+                  ),
+                  items: ['Credit Card', 'Debit Card', 'PayPal', 'Bank Transfer']
+                      .map((method) => DropdownMenuItem(
+                    value: method,
+                    child: Text(method),
+                  ))
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _paymentMethod = value;
+                      });
+                    }
+                  },
+                ),
+                const SizedBox(height: 24),
+
+                // Action Buttons
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     TextButton(
                       onPressed: () => Navigator.pop(context),
-                      child: Text('Cancel'),
+                      child: const Text('CANCEL'),
                     ),
-                    SizedBox(width: 8),
+                    const SizedBox(width: 8),
                     ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                      ),
                       onPressed: _confirmBooking,
-                      child: Text('Confirm Booking', style: TextStyle(color: Colors.white)),
+                      child: const Text('CONFIRM BOOKING'),
                     ),
                   ],
                 ),

@@ -1,4 +1,3 @@
-//booking_management_page.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/hotel_provider.dart';
@@ -6,23 +5,53 @@ import '../widgets/weekly_booking_table.dart';
 import 'package:intl/intl.dart';
 import 'package:table_calendar/table_calendar.dart';
 import '../screens/calendar_booking_dialog.dart';
-class BookingManagementScreen extends StatelessWidget {
+
+class BookingManagementScreen extends StatefulWidget {
+  @override
+  _BookingManagementScreenState createState() => _BookingManagementScreenState();
+}
+
+class _BookingManagementScreenState extends State<BookingManagementScreen> {
   final _guestNameController = TextEditingController();
   DateTime? _selectedDate;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeData();
+  }
+
+  Future<void> _initializeData() async {
+    final hotelProvider = Provider.of<HotelProvider>(context, listen: false);
+    try {
+      await hotelProvider.fetchRooms();
+    } catch (e) {
+      print("Error fetching rooms: $e");
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final hotelProvider = Provider.of<HotelProvider>(context, listen: false);
-
-    // Fetch rooms
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      hotelProvider.fetchRooms();
-    });
+    final hotelProvider = Provider.of<HotelProvider>(context);
 
     // hotelId can not not null
     if (hotelProvider.hotelId == null) {
       return Scaffold(
-        body: Center(child: Text("Hotel ID not found. Please set up your hotel profile first.")),
+        body: Center(
+            child: Text("Hotel ID not found. Please set up your hotel profile first.")),
+      );
+    }
+
+    if (_isLoading) {
+      return Scaffold(
+        body: Center(child: CircularProgressIndicator()),
       );
     }
 
@@ -44,13 +73,15 @@ class BookingManagementScreen extends StatelessWidget {
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
               onPressed: () => _showOfflineBookingDialog(context, hotelProvider),
-              child: Text("Add Offline Booking", style: TextStyle(color: Colors.white)),
+              child: Text("Add Offline Booking",
+                  style: TextStyle(color: Colors.white)),
             ),
           ),
         ],
       ),
     );
   }
+
   Future<void> _showCalendarBookingDialog(
       BuildContext context,
       HotelProvider hotelProvider,
@@ -65,9 +96,9 @@ class BookingManagementScreen extends StatelessWidget {
       ),
     );
   }
-  
 
-  void _showOfflineBookingDialog(BuildContext context, HotelProvider hotelProvider) {
+  void _showOfflineBookingDialog(
+      BuildContext context, HotelProvider hotelProvider) {
     showDialog(
       context: context,
       builder: (context) {
@@ -95,36 +126,38 @@ class BookingManagementScreen extends StatelessWidget {
 
               return SingleChildScrollView(
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: _guestNameController,
-                      decoration: InputDecoration(
-                        labelText: "Guest Name",
-                        border: OutlineInputBorder(),
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: _guestNameController,
+                        decoration: InputDecoration(
+                          labelText: "Guest Name",
+                          border: OutlineInputBorder(),
+                        ),
                       ),
-                    ),
-                    SizedBox(height: 20),
-                    DropdownButtonFormField<String>(
-                      hint: Text("Select Room"),
-                      isExpanded: true,
-                      items: availableRooms.map((room) {
-                        return DropdownMenuItem<String>(
-                          value: room['id'],
-                          child: Text("Room ${room['roomNumber']} (${room['type']})"),
-                        );
-                      }).toList(),
-                      onChanged: (roomId) async {
-                        if (roomId != null) {
-                          final selectedRoom = availableRooms.firstWhere(
-                                  (r) => r['id'] == roomId);
-                          Navigator.of(context).pop(); // Close room selection dialog
-                          await _showCalendarBookingDialog(context, hotelProvider, selectedRoom);
-                        }
-                      },
-                    ),
-                  ],
-                ),
+                      SizedBox(height: 20),
+                      DropdownButtonFormField<String>(
+                        hint: Text("Select Room"),
+                        isExpanded: true,
+                        items: availableRooms.map((room) {
+                          return DropdownMenuItem<String>(
+                            value: room['id'],
+                            child: Text(
+                                "Room ${room['roomNumber']} (${room['type']})"),
+                          );
+                        }).toList(),
+                        onChanged: (roomId) async {
+                          if (roomId != null) {
+                            final selectedRoom = availableRooms.firstWhere(
+                                    (r) => r['id'] == roomId);
+                            Navigator.of(context)
+                                .pop(); // Close room selection dialog
+                            await _showCalendarBookingDialog(
+                                context, hotelProvider, selectedRoom);
+                          }
+                        },
+                      ),
+                    ]),
               );
             },
           ),
@@ -138,6 +171,4 @@ class BookingManagementScreen extends StatelessWidget {
       },
     );
   }
-
-
 }

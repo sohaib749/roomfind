@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:convert';
+import 'package:logger/logger.dart';
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -7,7 +9,7 @@ import 'package:cloudinary_public/cloudinary_public.dart';
 class HotelProvider with ChangeNotifier {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final CloudinaryPublic cloudinary;
-
+  final _logger = Logger();
   String? _hotelId;
   String? _userId;
   List<Map<String, dynamic>> _rooms = [];
@@ -48,29 +50,49 @@ class HotelProvider with ChangeNotifier {
     required String name,
     required String address,
     required String description,
+    required String city,
+    String? email,
+    String? phoneNumber,
+    String? website,
+    required String checkInTime,
+    required String checkOutTime,
+    List<String> amenities = const [],
   }) async {
+    if (_userId == null) {
+      throw Exception("User ID not found. Please try again.");
+    }
+
     try {
-      if (_userId == null) throw Exception("User ID not found");
-
-
+      // Create hotel profile in Firestore
       final hotelRef = await _firestore.collection('hotels').add({
-        "name": name,
-        "address": address,
-        "description": description,
-        "ownerId": _userId,
-        "createdAt": DateTime.now().toIso8601String(),
+        'userId': _userId,
+        'name': name,
+        'address': address,
+        'description': description,
+        'city': city,
+        'email': email ?? "",
+        'phoneNumber': phoneNumber ?? "",
+        'website': website ?? "",
+        'checkInTime': checkInTime,
+        'checkOutTime': checkOutTime,
+        'amenities': amenities,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
       });
-
-
-      await _firestore.collection('users').doc(_userId).update({
-        "hotelId": hotelRef.id,
-      });
-
+      
+      // Store the hotel ID
       _hotelId = hotelRef.id;
+      
+      // Update the user document with the hotel ID reference
+      await _firestore.collection('users').doc(_userId).update({
+        'hotelId': _hotelId,
+        'role': 'hotelOwner'
+      });
+      
       notifyListeners();
     } catch (e) {
-      print('Error creating hotel profile: $e');
-      rethrow;
+      _logger.e("Error creating hotel profile: $e");
+      throw e;
     }
   }
 
@@ -79,18 +101,40 @@ class HotelProvider with ChangeNotifier {
     try {
       if (_userId == null) throw Exception("User ID not found");
 
-
+      // Get the user document
       final userDoc = await _firestore.collection('users').doc(_userId).get();
-      if (!userDoc.exists || userDoc.data()?['hotelId'] == null) {
-        throw Exception("User is not associated with any hotel");
+      
+      if (!userDoc.exists) {
+        throw Exception("User not found");
+      }
+      
+      // Check if user has a hotelId
+      if (userDoc.data()?['hotelId'] == null) {
+        // Try to find a hotel created by this user
+        final hotelQuery = await _firestore
+            .collection('hotels')
+            .where('userId', isEqualTo: _userId)
+            .limit(1)
+            .get();
+            
+        if (hotelQuery.docs.isEmpty) {
+          throw Exception("User is not associated with any hotel");
+        }
+        
+        // Found a hotel, update the user document
+        _hotelId = hotelQuery.docs.first.id;
+        await _firestore.collection('users').doc(_userId).update({
+          'hotelId': _hotelId
+        });
+      } else {
+        _hotelId = userDoc.data()!['hotelId'];
       }
 
-      _hotelId = userDoc.data()!['hotelId'];
-
-
+      // Get the hotel document
       final hotelDoc = await _firestore.collection('hotels')
           .doc(_hotelId)
           .get();
+          
       if (!hotelDoc.exists) throw Exception("Hotel not found");
 
       return hotelDoc.data();
@@ -199,7 +243,7 @@ class HotelProvider with ChangeNotifier {
           return null;
         }
         return data;
-      }).whereType<Map<String, dynamic>>().toList(); // remove null values
+      }).whereType<Map<String, dynamic>>().toList(); // Remove null values
     } catch (e) {
       print('Error fetching bookings for room: $e');
       return [];
@@ -280,7 +324,7 @@ class HotelProvider with ChangeNotifier {
     if (_hotelId == null) throw Exception("Hotel ID not found");
 
     try {
-      
+      // Prepare the booking document
       final bookingData = {
         'guestCnic': booking['guestCnic'], // From text field
         'roomNumber': booking['roomNumber'],
@@ -294,10 +338,10 @@ class HotelProvider with ChangeNotifier {
         'lastUpdated': Timestamp.now(),
       };
 
-
+      // Add to Firestore
       await _firestore.collection('bookings').add(bookingData);
 
-    
+      // Refresh local data
       await fetchRooms();
       notifyListeners();
 
@@ -306,7 +350,7 @@ class HotelProvider with ChangeNotifier {
       rethrow;
     }
   }
-
+  // Add to HotelProvider class
 
   Future<List<Map<String, dynamic>>> getBookingsForDateRange(
       String roomId, DateTime start, DateTime end) async {
@@ -330,8 +374,34 @@ class HotelProvider with ChangeNotifier {
       return [];
     }
   }
+// In your HotelProvider class
+  Future<List<Map<String, dynamic>>> getBookingsForWeek(
+      String hotelId,
+      DateTime startDate,
+      DateTime endDate
+      ) async {
+    try {
+      final query = FirebaseFirestore.instance
+          .collection('bookings')
+          .where('hotelId', isEqualTo: hotelId)
+          .where('startDate', isLessThanOrEqualTo: Timestamp.fromDate(endDate))
+          .where('endDate', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate));
 
- 
+      final snapshot = await query.get();
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        return {
+          ...data,
+          'startDate': (data['startDate'] as Timestamp).toDate(),
+          'endDate': (data['endDate'] as Timestamp).toDate(),
+        };
+      }).toList();
+    } catch (e) {
+      print('Error fetching bookings: $e');
+      return [];
+    }
+  }
+  // Add these methods to your HotelProvider class
 
   Future<List<Map<String, dynamic>>> getAvailableRooms(DateTime date) async {
     if (_hotelId == null) return [];
@@ -383,7 +453,7 @@ class HotelProvider with ChangeNotifier {
     }
   }
 
-
+// Your existing method with the fixes
   Future<Map<DateTime, bool>> getRoomAvailability(
       String roomId, DateTime startDate, int days) async {
     final availability = <DateTime, bool>{};
@@ -396,7 +466,7 @@ class HotelProvider with ChangeNotifier {
     }
 
     try {
-      // Getting all bookings for this room that overlap with our date range
+      // Get all bookings for this room that overlap with our date range
       final bookings = await _firestore
           .collection('bookings')
           .where('roomId', isEqualTo: roomId)
@@ -404,7 +474,7 @@ class HotelProvider with ChangeNotifier {
           .where('endDate', isGreaterThanOrEqualTo: Timestamp.fromDate(startDate))
           .get();
 
-      // marking booked dates
+      // Mark booked dates
       for (final booking in bookings.docs) {
         final bookingData = booking.data();
         final bookingStart = (bookingData['startDate'] as Timestamp).toDate();
@@ -425,7 +495,7 @@ class HotelProvider with ChangeNotifier {
 
     return availability;
   }
-
+  // Add to your HotelProvider class
   List<Map<String, dynamic>> cachedBookings = [];
   bool _isBookingCacheValid = false;
 
@@ -439,7 +509,7 @@ class HotelProvider with ChangeNotifier {
           .get();
 
       cachedBookings = snapshot.docs.map((doc) {
-        final data = doc.data() as Map<String, dynamic>;
+        final data = doc.data();
         return {
           ...data,
           'startDate': (data['startDate'] as Timestamp).toDate(),
@@ -461,50 +531,130 @@ class HotelProvider with ChangeNotifier {
     }
   }
 
+  // Add to your HotelProvider class
+  String? get currentHotelId => _hotelId;
+
+  // Setter for hotelId with notification
+  set currentHotelId(String? value) {
+    if (_hotelId != value) {
+      _hotelId = value;
+      notifyListeners();
+    }
+  }
+
+
+  Future<void> ensureHotelIdLoaded() async {
+    try {
+      // Return if already loaded
+      if (_hotelId != null && _hotelId!.isNotEmpty) return;
+
+      // Try to get from rooms collection
+      final roomsSnapshot = await _firestore.collection('rooms')
+          .where('hotelId', isNotEqualTo: null)
+          .limit(1)
+          .get();
+
+      if (roomsSnapshot.docs.isNotEmpty) {
+        final hotelId = roomsSnapshot.docs.first.get('hotelId') as String?;
+        if (hotelId != null) {
+          currentHotelId = hotelId;
+          return;
+        }
+      }
+
+      // Fallback to hotels collection
+      final hotelsSnapshot = await _firestore.collection('hotels')
+          .limit(1)
+          .get();
+
+      if (hotelsSnapshot.docs.isNotEmpty) {
+        currentHotelId = hotelsSnapshot.docs.first.id;
+        return;
+      }
+
+      // Final fallback
+      _logger.w('No hotelId found in database');
+      currentHotelId = null;
+    } catch (e) {
+      _logger.e('Error loading hotelId', error: e);
+      currentHotelId = null;
+    }
+  }
+
+  Future<String?> getHotelIdForRoom(String roomId) async {
+    try {
+      final doc = await _firestore.collection('rooms').doc(roomId).get();
+      if (doc.exists) {
+        final hotelId = doc.get('hotelId') as String?;
+        if (hotelId != null) {
+          currentHotelId = hotelId;
+          return hotelId;
+        }
+      }
+
+      await ensureHotelIdLoaded();
+      return _hotelId;
+    } catch (e) {
+      _logger.e('Error getting hotelId for room $roomId', error: e);
+      await ensureHotelIdLoaded();
+      return _hotelId;
+    }
+  }
+
+
+
   Future<void> addOnlineBooking({
     required String roomId,
     required String roomNumber,
+    required String hotelId,
     required DateTime startDate,
     required DateTime endDate,
     required String guestName,
-    required String guestEmail,
+    required String guestCnic,
     required String guestPhone,
+    required String userId,
     required String paymentMethod,
   }) async {
-    if (_hotelId == null) throw Exception("Hotel ID not found");
-
     try {
-      // Check room availability first
+      // First verify availability again (in case something changed)
       final isAvailable = await isRoomAvailable(roomId, startDate, endDate);
       if (!isAvailable) {
-        throw Exception("Room is not available for the selected dates");
+        throw Exception('Room is no longer available for the selected dates');
       }
 
       final bookingData = {
-        'roomNumber': roomNumber,
         'roomId': roomId,
-        'status': 'Confirmed',
-        'hotelId': _hotelId,
+        'roomNumber': roomNumber,
+        'hotelId': hotelId,
         'startDate': Timestamp.fromDate(startDate),
         'endDate': Timestamp.fromDate(endDate),
-        'createdAt': Timestamp.now(),
-        'bookingType': 'Online',
         'guestName': guestName,
-        'guestEmail': guestEmail,
+        'guestCnic': guestCnic,
         'guestPhone': guestPhone,
+        'userId': userId,
         'paymentMethod': paymentMethod,
+        'status': 'Confirmed',
+        'createdAt': Timestamp.now(),
         'lastUpdated': Timestamp.now(),
       };
 
       await _firestore.collection('bookings').add(bookingData);
-      await fetchRooms(); // refresh data
       notifyListeners();
     } catch (e) {
-      print('Error adding online booking: $e');
+      debugPrint('Error adding online booking: $e');
       rethrow;
     }
   }
-  // Add to HotelProvider class
+  Future<String> _resolveDefaultHotelId() async {
+    try {
+      final snapshot = await _firestore.collection('hotels').limit(1).get();
+      return snapshot.docs.first.id;
+    } catch (e) {
+      _logger.e('Could not resolve default hotel', error: e);
+      return 'default_hotel_id';
+    }
+  }
+
   Future<List<DateTime>> getUnavailableDates(String roomId) async {
     try {
       final now = DateTime.now();
@@ -534,4 +684,265 @@ class HotelProvider with ChangeNotifier {
     }
   }
 
+  // Update hotel profile
+  Future<void> updateHotelProfile({
+    required String name,
+    required String address,
+    required String description,
+    required String city,
+    String? phoneNumber,
+    String? email,
+    String? website,
+    List<String>? amenities,
+    String? checkInTime,
+    String? checkOutTime,
+    File? profileImage,
+  }) async {
+    try {
+      if (_hotelId == null) {
+        throw Exception("Hotel ID not found. Please try again.");
+      }
+      
+      // Prepare update data
+      final Map<String, dynamic> updateData = {
+        'name': name,
+        'address': address,
+        'description': description,
+        'city': city,
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+      
+      // Add optional fields if provided
+      if (phoneNumber != null) updateData['phoneNumber'] = phoneNumber;
+      if (email != null) updateData['email'] = email;
+      if (website != null) updateData['website'] = website;
+      if (amenities != null) updateData['amenities'] = amenities;
+      if (checkInTime != null) updateData['checkInTime'] = checkInTime;
+      if (checkOutTime != null) updateData['checkOutTime'] = checkOutTime;
+      
+      // Upload profile image if provided
+      if (profileImage != null) {
+        try {
+          final imageUrl = await _uploadImageToCloudinary(profileImage);
+          if (imageUrl != null) {
+            updateData['profileImageUrl'] = imageUrl;
+          }
+        } catch (e) {
+          _logger.w('Failed to upload profile image: $e');
+          // Continue with update even if image upload fails
+        }
+      }
+      
+      // Update hotel profile in Firestore
+      await _firestore.collection('hotels').doc(_hotelId).update(updateData);
+      
+      // Log successful update
+      _logger.i('Hotel profile updated successfully: $_hotelId');
+      
+      // Notify listeners to update UI
+      notifyListeners();
+    } catch (e) {
+      _logger.e('Error updating hotel profile: $e');
+      
+      // Provide more specific error messages based on the exception
+      if (e is FirebaseException) {
+        if (e.code == 'not-found') {
+          throw Exception("Hotel profile not found. Please create a profile first.");
+        } else if (e.code == 'permission-denied') {
+          throw Exception("You don't have permission to update this hotel profile.");
+        } else {
+          throw Exception("Database error: ${e.message}");
+        }
+      } else {
+        throw Exception("Failed to update hotel profile: ${e.toString()}");
+      }
+    }
+  }
+
+  // Get hotel statistics
+  Future<Map<String, dynamic>> getHotelStatistics() async {
+    if (_hotelId == null) throw Exception("Hotel ID not found");
+    
+    try {
+      // Get total rooms
+      final roomsSnapshot = await _firestore
+          .collection('rooms')
+          .where('hotelId', isEqualTo: _hotelId)
+          .get();
+      
+      final totalRooms = roomsSnapshot.docs.length;
+      
+      // Get available rooms
+      final availableRooms = roomsSnapshot.docs
+          .where((doc) => doc.data()['status'] == 'Available')
+          .length;
+      
+      // Get current bookings
+      final now = DateTime.now();
+      final bookingsSnapshot = await _firestore
+          .collection('bookings')
+          .where('hotelId', isEqualTo: _hotelId)
+          .where('endDate', isGreaterThanOrEqualTo: Timestamp.fromDate(now))
+          .get();
+      
+      final currentBookings = bookingsSnapshot.docs.length;
+      
+      // Calculate occupancy rate
+      final occupancyRate = totalRooms > 0 
+          ? ((totalRooms - availableRooms) / totalRooms * 100).toStringAsFixed(1) 
+          : '0';
+      
+      // Get revenue (last 30 days)
+      final thirtyDaysAgo = DateTime.now().subtract(Duration(days: 30));
+      final recentBookingsSnapshot = await _firestore
+          .collection('bookings')
+          .where('hotelId', isEqualTo: _hotelId)
+          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(thirtyDaysAgo))
+          .get();
+      
+      double monthlyRevenue = 0;
+      for (var doc in recentBookingsSnapshot.docs) {
+        final data = doc.data();
+        if (data['totalAmount'] != null) {
+          monthlyRevenue += (data['totalAmount'] as num).toDouble();
+        }
+      }
+      
+      return {
+        'totalRooms': totalRooms,
+        'availableRooms': availableRooms,
+        'currentBookings': currentBookings,
+        'occupancyRate': '$occupancyRate%',
+        'monthlyRevenue': monthlyRevenue,
+      };
+    } catch (e) {
+      _logger.e('Error getting hotel statistics: $e');
+      rethrow;
+    }
+  }
+
+  // Get popular room types
+  Future<List<Map<String, dynamic>>> getPopularRoomTypes() async {
+    if (_hotelId == null) throw Exception("Hotel ID not found");
+    
+    try {
+      final bookingsSnapshot = await _firestore
+          .collection('bookings')
+          .where('hotelId', isEqualTo: _hotelId)
+          .get();
+      
+      // Count bookings by room type
+      final Map<String, int> roomTypeCount = {};
+      
+      for (var doc in bookingsSnapshot.docs) {
+        final roomId = doc.data()['roomId'];
+        if (roomId != null) {
+          final roomDoc = await _firestore.collection('rooms').doc(roomId).get();
+          if (roomDoc.exists) {
+            final roomType = roomDoc.data()?['type'];
+            if (roomType != null) {
+              roomTypeCount[roomType] = (roomTypeCount[roomType] ?? 0) + 1;
+            }
+          }
+        }
+      }
+      
+      // Convert to list and sort by popularity
+      final List<Map<String, dynamic>> popularRoomTypes = roomTypeCount.entries
+          .map((entry) => {
+                'type': entry.key,
+                'bookings': entry.value,
+              })
+          .toList();
+      
+      popularRoomTypes.sort((a, b) => b['bookings'].compareTo(a['bookings']));
+      
+      return popularRoomTypes;
+    } catch (e) {
+      _logger.e('Error getting popular room types: $e');
+      return [];
+    }
+  }
+
+  // Get booking trends
+  Future<Map<String, int>> getBookingTrends() async {
+    if (_hotelId == null) throw Exception("Hotel ID not found");
+    
+    try {
+      final now = DateTime.now();
+      final sixMonthsAgo = DateTime(now.year, now.month - 6, now.day);
+      
+      final bookingsSnapshot = await _firestore
+          .collection('bookings')
+          .where('hotelId', isEqualTo: _hotelId)
+          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(sixMonthsAgo))
+          .get();
+      
+      // Group bookings by month
+      final Map<String, int> monthlyBookings = {};
+      
+      for (var doc in bookingsSnapshot.docs) {
+        final createdAt = doc.data()['createdAt'] as Timestamp?;
+        if (createdAt != null) {
+          final date = createdAt.toDate();
+          final monthKey = '${date.year}-${date.month.toString().padLeft(2, '0')}';
+          monthlyBookings[monthKey] = (monthlyBookings[monthKey] ?? 0) + 1;
+        }
+      }
+      
+      return monthlyBookings;
+    } catch (e) {
+      _logger.e('Error getting booking trends: $e');
+      return {};
+    }
+  }
+
+  // Export hotel data
+  Future<String> exportHotelData() async {
+    if (_hotelId == null) throw Exception("Hotel ID not found");
+    
+    try {
+      // Get hotel profile
+      final hotelDoc = await _firestore.collection('hotels').doc(_hotelId).get();
+      final hotelData = hotelDoc.data() ?? {};
+      
+      // Get rooms
+      final roomsSnapshot = await _firestore
+          .collection('rooms')
+          .where('hotelId', isEqualTo: _hotelId)
+          .get();
+      
+      final roomsData = roomsSnapshot.docs.map((doc) {
+        final data = doc.data();
+        data['id'] = doc.id;
+        return data;
+      }).toList();
+      
+      // Get bookings
+      final bookingsSnapshot = await _firestore
+          .collection('bookings')
+          .where('hotelId', isEqualTo: _hotelId)
+          .get();
+      
+      final bookingsData = bookingsSnapshot.docs.map((doc) {
+        final data = doc.data();
+        data['id'] = doc.id;
+        return data;
+      }).toList();
+      
+      // Combine all data
+      final exportData = {
+        'hotel': hotelData,
+        'rooms': roomsData,
+        'bookings': bookingsData,
+        'exportDate': DateTime.now().toIso8601String(),
+      };
+      
+      // Convert to JSON
+      return jsonEncode(exportData);
+    } catch (e) {
+      _logger.e('Error exporting hotel data: $e');
+      throw Exception("Failed to export hotel data: ${e.toString()}");
+    }
+  }
 }
