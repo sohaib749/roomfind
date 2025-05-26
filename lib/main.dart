@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
 import 'package:roomfind/providers/customer_hotel_provider.dart';
+import 'package:roomfind/screens/customer/customer_home_page.dart';
 import 'package:roomfind/widgets/splash.dart';
 import 'package:roomfind/providers/hotel_provider.dart';
 import 'package:cloudinary_public/cloudinary_public.dart'; // Use correct Cloudinary package
@@ -34,7 +35,7 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.green,
       ),
-      home: SplashScreen(), //  initial screen
+      home: CustomerHomePage(phoneNumber: '03085265734'), //  initial screen
     );
   }
 }

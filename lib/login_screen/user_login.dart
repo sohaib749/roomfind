@@ -54,6 +54,8 @@ class _UserLoginState extends State<UserLogin> {
       // retrieve user data
       Map<String, dynamic> userData = snapshot.docs[0].data() as Map<String, dynamic>;
 
+      debugPrint('userData: ${userData["role"]}');
+
       // Check  password
       if (userData["password"] != password) {
         ScaffoldMessenger.of(context).showSnackBar(
